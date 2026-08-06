@@ -1,0 +1,30 @@
+{
+  "productName": "Monochrome",
+  "version": "1.0.0",
+  "identifier": "com.monochrome.desktop",
+  "app": {
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "title": "Monochrome",
+        "url": "https://monochrome.tf/",
+        "width": 1280,
+        "height": 800,
+        "resizable": true,
+        "center": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}
