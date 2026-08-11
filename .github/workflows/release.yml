@@ -1,0 +1,79 @@
+name: Production Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+# Grant permissions needed to create GitHub Releases and upload assets
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    # 1. Only run if the PR was MERGED
+    # 2. Only run if the PR originated from the 'dev' branch
+    if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'dev'
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: 'windows-latest'
+            args: ''
+          - platform: 'ubuntu-22.04'
+            args: ''
+          - platform: 'macos-latest' # Apple Silicon (M1/M2/M3/M4)
+            args: '--target aarch64-apple-darwin'
+          - platform: 'macos-latest' # Intel Macs
+            args: '--target x86_64-apple-darwin'
+
+    runs-on: ${{ matrix.platform }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: 'npm'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Install macos targets on macos runners
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      # Smart caching for Rust to drastically speed up CI build times
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # Install WebKit/GTK header dependencies on Ubuntu
+      - name: Install Linux Dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Build and Release Tauri App
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: 'Monochrome Desktop v__VERSION__'
+          releaseBody: |
+            ### Automated Release
+            * Merged from `dev` into `main`.
+            * Native installers for Windows, Linux, Apple Silicon, and Intel Macs.
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
