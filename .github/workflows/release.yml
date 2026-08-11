@@ -37,8 +37,10 @@ jobs:
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
+        env:
+          NODE_TLS_REJECT_UNAUTHORIZED: '0'
         with:
-          node-version: lts/*
+          node-version: '24'
           cache: 'npm'
 
       - name: Setup Rust toolchain
