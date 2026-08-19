@@ -15,7 +15,7 @@ jobs:
     # 1. Only run if the PR was MERGED
     # 2. Only run if the PR originated from the 'dev' branch
     if: github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'dev'
-    
+
     strategy:
       fail-fast: false
       matrix:
@@ -30,7 +30,7 @@ jobs:
             args: '--target x86_64-apple-darwin'
 
     runs-on: ${{ matrix.platform }}
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -65,6 +65,12 @@ jobs:
       - name: Install Frontend Dependencies
         run: npm ci
 
+      # On Ubuntu, tauri-action only builds/releases .deb and .rpm here.
+      # The AppImage is built and fixed separately below, then appended to
+      # this same release, because it needs a post-build patch that
+      # tauri-action's all-in-one build+publish step doesn't allow for.
+      # Windows and macOS legs are completely unaffected and behave exactly
+      # as before.
       - name: Build and Release Tauri App
         uses: tauri-apps/tauri-action@v1
         env:
@@ -78,4 +84,62 @@ jobs:
             * Native installers for Windows, Linux, Apple Silicon, and Intel Macs.
           releaseDraft: false
           prerelease: false
-          args: ${{ matrix.args }}
+          args: ${{ matrix.platform == 'ubuntu-22.04' && '--bundles deb,rpm' || matrix.args }}
+
+      # --- EGL_BAD_PARAMETER fix (Ubuntu/AppImage only) ----------------------
+      # Confirmed root cause: the AppImage bundles Ubuntu 22.04's own
+      # libwayland-client/cursor/egl/server libraries via linuxdeploy. On
+      # systems with a much newer Wayland/Mesa stack (e.g. Arch/CachyOS),
+      # these bundled libraries are version-mismatched against the host's
+      # compositor, causing WebKitGTK to fail EGL initialization with
+      # "Could not create default EGL display: EGL_BAD_PARAMETER" and a
+      # blank white window — even though the exact same build works fine
+      # when done locally on a matching system.
+      #
+      # Fix: build the AppImage separately, delete the bundled
+      # libwayland-*.so* files so the binary falls through to the host's
+      # own matching copies at runtime, repack, then upload it to the same
+      # release tauri-action already created above.
+      - name: Build AppImage separately (Linux only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: npm run tauri build -- --bundles appimage
+
+      - name: Strip bundled libwayland libraries from AppImage
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          APPIMAGE=$(find src-tauri/target/release/bundle/appimage -name "*.AppImage" | head -n1)
+          echo "Repacking: $APPIMAGE"
+
+          chmod +x "$APPIMAGE"
+          "$APPIMAGE" --appimage-extract
+          rm "$APPIMAGE"
+
+          find squashfs-root \( \
+            -path "*/libwayland-client.so*" -o \
+            -path "*/libwayland-cursor.so*" -o \
+            -path "*/libwayland-egl.so*" -o \
+            -path "*/libwayland-server.so*" \
+          \) -print -delete
+
+          # appimagetool releases on the legacy AppImageKit repo 404 —
+          # pull from the maintained AppImage/appimagetool repo instead.
+          curl -L -o appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+          chmod +x appimagetool
+
+          # No FUSE available on GitHub-hosted runners.
+          ./appimagetool --appimage-extract-and-run squashfs-root "$APPIMAGE"
+
+      - name: Get app version (Linux only)
+        if: matrix.platform == 'ubuntu-22.04'
+        id: appversion
+        run: |
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Upload fixed AppImage to release (Linux only)
+        if: matrix.platform == 'ubuntu-22.04'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.appversion.outputs.version }}
+          files: src-tauri/target/release/bundle/appimage/*.AppImage
